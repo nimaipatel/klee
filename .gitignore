@@ -30,3 +30,10 @@ lit.site.cfg
 autoconf/aclocal.m4
 autoconf/autom4te.cache/
 autom4te.cache/
+
+/klee-out-*
+/klee-last
+/*.bc
+/*.ll
+/.vscode/
+
