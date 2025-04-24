@@ -38,6 +38,8 @@ set(LLVM_COMPONENTS
   support
 )
 
+find_library(UNICORN_LIB unicorn REQUIRED)
+
 klee_get_llvm_libs(LLVM_LIBS ${LLVM_COMPONENTS})
 target_link_libraries(kleeCore PUBLIC ${LLVM_LIBS} ${SQLITE3_LIBRARIES})
 target_link_libraries(kleeCore PRIVATE
@@ -46,4 +48,5 @@ target_link_libraries(kleeCore PRIVATE
   kleaverSolver
   kleaverExpr
   kleeSupport
+  ${UNICORN_LIB}
 )
