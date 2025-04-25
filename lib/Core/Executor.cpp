@@ -95,6 +95,10 @@ typedef unsigned TypeSize;
 #include <sys/mman.h>
 #include <vector>
 
+#include <llvm/Object/ObjectFile.h>
+#include <llvm/Object/ELF.h>
+#include <llvm/Object/ELFObjectFile.h>
+
 using namespace llvm;
 using namespace klee;
 #define APPOX_FLOAT 1
@@ -2628,6 +2632,45 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 
 												for (unsigned j=0; j<numArgs; ++j)
 														arguments.push_back(eval(ki, j+1, state).value);
+
+
+												// TODO: get the object file using LD_PRELOAD env variable
+												auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
+												if (!objOrErr) {
+													llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
+													return;
+												}
+												auto obj = std::move(*objOrErr);
+												for (auto& section : obj.getBinary()->sections()) {
+													auto section_name = section.getName();
+													if (!section_name) continue;
+
+													if (*section_name == ".text") {
+														auto contents = section.getContents();
+														if (!contents) {
+															llvm::errs() << "Failed to get section contents\n";
+															continue;
+														}
+
+														// TODO: write code section to the VM...
+														for (auto& symbol : obj.getBinary()->symbols()) {
+															auto nameOrErr = symbol.getName();
+															if (!nameOrErr) continue;
+
+															// TODO: match this with the name of the function from f
+															if (*nameOrErr == "foo") {
+																auto valueOrErr = symbol.getValue();
+																if (!valueOrErr) {
+												    				llvm::errs() << "Failed to get symbol value\n";
+												    				continue;
+																}
+																// TODO: start executing from the offset...
+																uint64_t fooOffset = *valueOrErr;
+															}
+														}
+													}
+												}
+
 
 												if (f) {
 														const FunctionType *fType = 
