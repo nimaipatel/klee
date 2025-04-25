@@ -24,6 +24,9 @@
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <unicorn/unicorn.h>
 
 #include <csetjmp>
 #include <csignal>
@@ -34,6 +37,8 @@ using namespace klee;
 /***/
 
 static sigjmp_buf escapeCallJmpBuf;
+
+static uc_engine *uc = NULL;
 
 extern "C" {
 
@@ -68,6 +73,32 @@ public:
   int getLastErrno();
   void setLastErrno(int newErrno);
 };
+
+void vm_lazy_init() {
+  constexpr uint64_t ADDRESS = 0x10000;
+  constexpr uint64_t STACK_ADDR = 0x20000;
+  constexpr uint64_t STACK_SIZE = 0x1000;
+  constexpr uint64_t DATA_ADDR = 0x30000;
+
+  if (uc) {
+    return;
+  }
+
+  uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &uc);
+
+  if (err != UC_ERR_OK) {
+    llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err)
+                 << "\n";
+    abort();
+  }
+
+  // Map code, stack, and data memory
+  uc_mem_map(uc, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
+  uc_mem_map(uc, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
+  uc_mem_map(uc, DATA_ADDR, 0x1000, UC_PROT_ALL);
+
+  // uc_mem_write(uc, ADDRESS, code, size);
+}
 
 std::string &ExternalDispatcherImpl::getFreshModuleID() {
   // We store the module IDs because `llvm::Module` constructor takes the
@@ -359,4 +390,4 @@ int ExternalDispatcher::getLastErrno() { return impl->getLastErrno(); }
 void ExternalDispatcher::setLastErrno(int newErrno) {
   impl->setLastErrno(newErrno);
 }
-}
+} // namespace klee
