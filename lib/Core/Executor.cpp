@@ -99,6 +99,8 @@ typedef unsigned TypeSize;
 #include <llvm/Object/ELF.h>
 #include <llvm/Object/ELFObjectFile.h>
 
+#include <unicorn/unicorn.h>
+
 using namespace llvm;
 using namespace klee;
 #define APPOX_FLOAT 1
@@ -2633,45 +2635,6 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 												for (unsigned j=0; j<numArgs; ++j)
 														arguments.push_back(eval(ki, j+1, state).value);
 
-
-												// TODO: get the object file using LD_PRELOAD env variable
-												auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
-												if (!objOrErr) {
-													llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
-													return;
-												}
-												auto obj = std::move(*objOrErr);
-												for (auto& section : obj.getBinary()->sections()) {
-													auto section_name = section.getName();
-													if (!section_name) continue;
-
-													if (*section_name == ".text") {
-														auto contents = section.getContents();
-														if (!contents) {
-															llvm::errs() << "Failed to get section contents\n";
-															continue;
-														}
-
-														// TODO: write code section to the VM...
-														for (auto& symbol : obj.getBinary()->symbols()) {
-															auto nameOrErr = symbol.getName();
-															if (!nameOrErr) continue;
-
-															// TODO: match this with the name of the function from f
-															if (*nameOrErr == "foo") {
-																auto valueOrErr = symbol.getValue();
-																if (!valueOrErr) {
-												    				llvm::errs() << "Failed to get symbol value\n";
-												    				continue;
-																}
-																// TODO: start executing from the offset...
-																uint64_t fooOffset = *valueOrErr;
-															}
-														}
-													}
-												}
-
-
 												if (f) {
 														const FunctionType *fType = 
 																dyn_cast<FunctionType>(cast<PointerType>(f->getType())->getElementType());
@@ -4153,6 +4116,30 @@ static std::set<std::string> okExternals(okExternalsList,
 				okExternalsList + 
 				(sizeof(okExternalsList)/sizeof(okExternalsList[0])));
 
+
+static uc_engine *unicorn_engine = NULL;
+
+#define ADDRESS    0x10000
+#define STACK_ADDR 0x20000
+#define STACK_SIZE 0x1000
+#define DATA_ADDR  0x30000
+
+void unicorn_init_lazy() {
+  if (unicorn_engine) return;
+
+  uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
+
+  if (err != UC_ERR_OK) {
+    llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err) << "\n";
+    abort();
+  }
+
+  // Map code, stack, and data memory
+  uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
+  uc_mem_map(unicorn_engine, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
+  uc_mem_map(unicorn_engine, DATA_ADDR, 0x1000, UC_PROT_ALL);
+}
+
 void Executor::callExternalFunction(ExecutionState &state,
 				KInstruction *target,
 				Function *function,
@@ -4160,6 +4147,50 @@ void Executor::callExternalFunction(ExecutionState &state,
 		// check if specialFunctionHandler wants it
 		if (specialFunctionHandler->handle(state, function, target, arguments))
 				return;
+
+		bool cond = true;
+		if (cond) {
+			unicorn_init_lazy();
+
+			// TODO: get the object file using LD_PRELOAD env variable
+			auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
+			if (!objOrErr) {
+				llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
+				return;
+			}
+			auto obj = std::move(*objOrErr);
+			for (auto& section : obj.getBinary()->sections()) {
+				auto section_name = section.getName();
+				if (!section_name || *section_name != ".text") continue;
+
+				auto text_contents = section.getContents();
+				if (!text_contents) {
+					llvm::errs() << "Failed to get section contents\n";
+					continue;
+				}
+
+  				uc_mem_write(unicorn_engine, ADDRESS, text_contents->data(), text_contents->size());
+
+				// TODO: write code section to the VM...
+				for (auto& symbol : obj.getBinary()->symbols()) {
+					auto symbol_name = symbol.getName();
+					if (!symbol_name || *symbol_name != "foo") continue;
+
+					// TODO: match this with the name of the function from f
+					auto symbol_value = symbol.getValue();
+					if (!symbol_value) {
+						llvm::errs() << "Failed to get symbol value\n";
+						continue;
+					}
+					// TODO: start executing from the offset...
+					uint64_t fooOffset = *symbol_value;
+				}
+			}
+
+
+			// unicorn case, this is all we need, so return early...
+			return;
+		}
 
 		if (ExternalCalls == ExternalCallPolicy::None &&
 						!okExternals.count(function->getName().str())) {
