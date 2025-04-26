@@ -4119,25 +4119,39 @@ static std::set<std::string> okExternals(okExternalsList,
 
 static uc_engine *unicorn_engine = NULL;
 
-#define ADDRESS    0x10000
-#define STACK_ADDR 0x20000
-#define STACK_SIZE 0x1000
-#define DATA_ADDR  0x30000
+#define ADDRESS      0x10000
+#define STACK_ADDR   0x300000
+#define STACK_SIZE   0x1000
+#define DATA_ADDR    0x400000
+#define DATA_SIZE    0x1000
 
 void unicorn_init_lazy() {
-  if (unicorn_engine) return;
+    if (unicorn_engine) return;
 
-  uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
+    uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
+    if (err != UC_ERR_OK) {
+        llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err) << "\n";
+        abort();
+    }
 
-  if (err != UC_ERR_OK) {
-    llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err) << "\n";
-    abort();
-  }
+    // Map code, stack, and data memory
+    err = uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
+    if (err != UC_ERR_OK) {
+        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        abort();
+    }
 
-  // Map code, stack, and data memory
-  uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
-  uc_mem_map(unicorn_engine, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
-  uc_mem_map(unicorn_engine, DATA_ADDR, 0x1000, UC_PROT_ALL);
+	err = uc_mem_map(unicorn_engine, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
+    if (err != UC_ERR_OK) {
+        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        abort();
+    }
+
+    err = uc_mem_map(unicorn_engine, DATA_ADDR, DATA_SIZE, UC_PROT_ALL);
+    if (err != UC_ERR_OK) {
+        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        abort();
+    }
 }
 
 void Executor::callExternalFunction(ExecutionState &state,
@@ -4147,50 +4161,6 @@ void Executor::callExternalFunction(ExecutionState &state,
 		// check if specialFunctionHandler wants it
 		if (specialFunctionHandler->handle(state, function, target, arguments))
 				return;
-
-		bool cond = true;
-		if (cond) {
-			unicorn_init_lazy();
-
-			// TODO: get the object file using LD_PRELOAD env variable
-			auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
-			if (!objOrErr) {
-				llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
-				return;
-			}
-			auto obj = std::move(*objOrErr);
-			for (auto& section : obj.getBinary()->sections()) {
-				auto section_name = section.getName();
-				if (!section_name || *section_name != ".text") continue;
-
-				auto text_contents = section.getContents();
-				if (!text_contents) {
-					llvm::errs() << "Failed to get section contents\n";
-					continue;
-				}
-
-  				uc_mem_write(unicorn_engine, ADDRESS, text_contents->data(), text_contents->size());
-
-				// TODO: write code section to the VM...
-				for (auto& symbol : obj.getBinary()->symbols()) {
-					auto symbol_name = symbol.getName();
-					if (!symbol_name || *symbol_name != "foo") continue;
-
-					// TODO: match this with the name of the function from f
-					auto symbol_value = symbol.getValue();
-					if (!symbol_value) {
-						llvm::errs() << "Failed to get symbol value\n";
-						continue;
-					}
-					// TODO: start executing from the offset...
-					uint64_t fooOffset = *symbol_value;
-				}
-			}
-
-
-			// unicorn case, this is all we need, so return early...
-			return;
-		}
 
 		if (ExternalCalls == ExternalCallPolicy::None &&
 						!okExternals.count(function->getName().str())) {
@@ -4242,6 +4212,97 @@ void Executor::callExternalFunction(ExecutionState &state,
 						}
 				}
 		}
+		
+
+		bool cond = false;
+		if (true) {
+			unicorn_init_lazy();
+
+			// TODO: get the object file using LD_PRELOAD env variable
+			auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
+			if (!objOrErr) {
+				llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
+				return;
+			}
+			auto obj = std::move(*objOrErr);
+			for (auto& section : obj.getBinary()->sections()) {
+				auto section_name = section.getName();
+				if (!section_name || *section_name != ".text") continue;
+
+				auto text_contents = section.getContents();
+				if (!text_contents) {
+					llvm::errs() << "Failed to get section contents\n";
+					continue;
+				}
+
+  				uc_mem_write(unicorn_engine, ADDRESS, text_contents->data(), text_contents->size());
+
+				// TODO: write code section to the VM...
+				for (auto& symbol : obj.getBinary()->symbols()) {
+					auto symbol_name = symbol.getName();
+					if (!symbol_name || *symbol_name != "foo") continue;
+
+					// TODO: match this with the name of the function from f
+					auto symbol_value = symbol.getValue();
+					if (!symbol_value) {
+						llvm::errs() << "Failed to get symbol value\n";
+						continue;
+					}
+					// TODO: start executing from the offset...
+					uint64_t offset = *symbol_value;
+					// uint64_t start_addr = ADDRESS + offset;
+
+					// uint32_t sp = STACK_ADDR + STACK_SIZE;
+					// uint32_t dummy_lr = ADDRESS + text_contents->size();
+
+					int i = 0;
+					for (; i < arguments.size() && i < 4; i += 1) {
+						uc_reg_write(unicorn_engine, UC_ARM_REG_R0 + i, &args[i]);
+					}
+
+					uint32_t stack = STACK_ADDR + STACK_SIZE - 0x10;
+					for (; i < arguments.size(); i += 1) {
+						// TODO: think this through...
+						uint32_t arg = (uint32_t) args[2 + i];
+						stack -= sizeof(arg);
+						uc_mem_write(unicorn_engine, stack, &arg, sizeof(arg));
+					}
+
+					uc_reg_write(unicorn_engine, UC_ARM_REG_SP, &stack);
+
+					uint32_t lr = ADDRESS + text_contents->size();
+					uc_reg_write(unicorn_engine, UC_ARM_REG_LR, &lr);
+
+
+    				uc_err err_uc = uc_emu_start(unicorn_engine, ADDRESS + offset, lr, 0, 0);
+					// TODO: error handling...
+					if (err_uc != UC_ERR_OK) {
+						std::cerr << "Unicorn emulation failed: " << uc_strerror(err_uc) << std::endl;
+  						return;
+					}
+
+					uint32_t ret_val = 0;
+					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
+
+
+					// for (; i < arguments.size(); i += 1) {
+					// 	uc_mem_write(unicorn_engine, DATA_ADDR + (i - 4) * sizeof(uint64_t), &args[i], sizeof(uint64_t));
+					// }
+
+					// err = uc_emu_start(uc, start_addr, stop_addr, 0, 0);
+					// if (err != UC_ERR_OK) {
+					//     llvm::errs() << "Failed to emulate function: " << uc_strerror(err) << "\n";
+					//     abort();
+					// }
+
+				}
+			}
+
+
+			// unicorn case, this is all we need, so return early...
+			return;
+		}
+
 
 		// Prepare external memory for invoking the function
 		state.addressSpace.copyOutConcretes();
