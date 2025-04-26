@@ -4154,6 +4154,13 @@ void unicorn_init_lazy() {
     }
 }
 
+void hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int size, int64_t value, void *user_data) {
+    printf("❌ Invalid memory %s at 0x%08llx (size %d)\n",
+           (type == UC_MEM_WRITE_UNMAPPED) ? "WRITE" : "READ",
+           address, size);
+}
+
+
 void Executor::callExternalFunction(ExecutionState &state,
 				KInstruction *target,
 				Function *function,
@@ -4257,10 +4264,11 @@ void Executor::callExternalFunction(ExecutionState &state,
 
 					int i = 0;
 					for (; i < arguments.size() && i < 4; i += 1) {
-						uc_reg_write(unicorn_engine, UC_ARM_REG_R0 + i, &args[i]);
+						uint32_t arg = (uint32_t) args[2 + i];
+						uc_reg_write(unicorn_engine, UC_ARM_REG_R0 + i, &arg);
 					}
 
-					uint32_t stack = STACK_ADDR + STACK_SIZE - 0x10;
+					uint32_t stack = STACK_ADDR + STACK_SIZE;
 					for (; i < arguments.size(); i += 1) {
 						// TODO: think this through...
 						uint32_t arg = (uint32_t) args[2 + i];
@@ -4270,8 +4278,12 @@ void Executor::callExternalFunction(ExecutionState &state,
 
 					uc_reg_write(unicorn_engine, UC_ARM_REG_SP, &stack);
 
+					// TODO: think this through...
 					uint32_t lr = ADDRESS + text_contents->size();
 					uc_reg_write(unicorn_engine, UC_ARM_REG_LR, &lr);
+
+					uc_hook trace;
+					uc_hook_add(unicorn_engine, &trace, UC_HOOK_MEM_INVALID, (void*)hook_mem_invalid, NULL, 1, 0);
 
 
     				uc_err err_uc = uc_emu_start(unicorn_engine, ADDRESS + offset, lr, 0, 0);
@@ -4283,17 +4295,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 
 					uint32_t ret_val = 0;
 					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
-
-
-					// for (; i < arguments.size(); i += 1) {
-					// 	uc_mem_write(unicorn_engine, DATA_ADDR + (i - 4) * sizeof(uint64_t), &args[i], sizeof(uint64_t));
-					// }
-
-					// err = uc_emu_start(uc, start_addr, stop_addr, 0, 0);
-					// if (err != UC_ERR_OK) {
-					//     llvm::errs() << "Failed to emulate function: " << uc_strerror(err) << "\n";
-					//     abort();
-					// }
+					std::cout << "Return value: " << ret_val << std::endl;
 
 				}
 			}
