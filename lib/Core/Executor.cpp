@@ -4160,7 +4160,6 @@ void hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int siz
            address, size);
 }
 
-
 void Executor::callExternalFunction(ExecutionState &state,
 				KInstruction *target,
 				Function *function,
@@ -4296,11 +4295,19 @@ void Executor::callExternalFunction(ExecutionState &state,
 
 					uint32_t ret_val = 0;
 					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
-					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
 
+					args[0] = ret_val;
+					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
 				}
 			}
 
+
+			Type *resultType = target->inst->getType();
+			if (resultType != Type::getVoidTy(function->getContext())) {
+					ref<Expr> e = ConstantExpr::fromMemory((void*) args, 
+									getWidthForLLVMType(resultType));
+					bindLocal(target, state, e);
+			}
 
 			// unicorn case, this is all we need, so return early...
 			return;
