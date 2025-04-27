@@ -4219,10 +4219,11 @@ void Executor::callExternalFunction(ExecutionState &state,
 						}
 				}
 		}
-		
 
-		bool cond = false;
-		if (true) {
+		std::string target_triple = kmodule->module->getTargetTriple();
+		std::string external_function_name = function->getName().str();
+		
+		if (target_triple == "armv7-none-unknown-eabi") {
 			unicorn_init_lazy();
 
 			// TODO: get the object file using LD_PRELOAD env variable
@@ -4247,7 +4248,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 				// TODO: write code section to the VM...
 				for (auto& symbol : obj.getBinary()->symbols()) {
 					auto symbol_name = symbol.getName();
-					if (!symbol_name || *symbol_name != "foo") continue;
+					if (!symbol_name || *symbol_name != external_function_name) continue;
 
 					// TODO: match this with the name of the function from f
 					auto symbol_value = symbol.getValue();
@@ -4290,12 +4291,12 @@ void Executor::callExternalFunction(ExecutionState &state,
 					// TODO: error handling...
 					if (err_uc != UC_ERR_OK) {
 						std::cerr << "Unicorn emulation failed: " << uc_strerror(err_uc) << std::endl;
-  						return;
+						abort();
 					}
 
 					uint32_t ret_val = 0;
 					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
-					std::cout << "Return value: " << ret_val << std::endl;
+					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
 
 				}
 			}
