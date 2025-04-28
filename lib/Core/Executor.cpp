@@ -4116,19 +4116,17 @@ static std::set<std::string> okExternals(okExternalsList,
 				okExternalsList + 
 				(sizeof(okExternalsList)/sizeof(okExternalsList[0])));
 
-
-
 #define ADDRESS      0x10000
+#define CODE_SIZE    0x200000
+
 #define STACK_ADDR   0x300000
 #define STACK_SIZE   0x1000
+
 #define DATA_ADDR    0x400000
 #define DATA_SIZE    0x1000
 
-
 void hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int size, int64_t value, void *user_data) {
-    printf("❌ Invalid memory %s at 0x%08llx (size %d)\n",
-           (type == UC_MEM_WRITE_UNMAPPED) ? "WRITE" : "READ",
-           address, size);
+    printf("Invalid memory %s at 0x%08llx (size %d)\n", (type == UC_MEM_WRITE_UNMAPPED) ? "WRITE" : "READ", address, size);
 }
 
 void Executor::callExternalFunction(ExecutionState &state,
@@ -4235,8 +4233,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 		std::string target_triple = kmodule->module->getTargetTriple();
 		std::string external_function_name = function->getName().str();
 		
-		// if (target_triple == "armv7-none-unknown-eabi") {
-		if (true) {
+		if (target_triple == "armv7-none-unknown-eabi") {
 			uc_engine *unicorn_engine = NULL;
 
     		uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
@@ -4246,7 +4243,7 @@ void Executor::callExternalFunction(ExecutionState &state,
     		}
 
     		// Map code, stack, and data memory
-    		err = uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
+    		err = uc_mem_map(unicorn_engine, ADDRESS, CODE_SIZE, UC_PROT_ALL);
     		if (err != UC_ERR_OK) {
         		llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
         		abort();
@@ -4337,17 +4334,6 @@ void Executor::callExternalFunction(ExecutionState &state,
 
 					args[0] = (uint64_t) ret_val;
 					args[1] = 0;
-
-					// Type *resultType = target->inst->getType();
-					// if (resultType != Type::getVoidTy(function->getContext())) {
-					// 		ref<Expr> e = ConstantExpr::fromMemory((void*) args, 
-					// 						getWidthForLLVMType(resultType));
-					// 		bindLocal(target, state, e);
-					// }
-
-					// // unicorn case, this is all we need, so return early...
-					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
-					// return;
 
     				uc_close(unicorn_engine);
 				}
