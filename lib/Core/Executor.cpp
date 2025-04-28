@@ -4230,10 +4230,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 						klee_warning_once(function, "%s", os.str().c_str());
 		}
 
-		std::string target_triple = kmodule->module->getTargetTriple();
-		std::string external_function_name = function->getName().str();
-		
-		if (target_triple == "armv7-none-unknown-eabi") {
+		if (kmodule->module->getTargetTriple() == "armv7-none-unknown-eabi") {
 			uc_engine *unicorn_engine = NULL;
 
     		uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
@@ -4268,6 +4265,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 				return;
 			}
 			auto obj = std::move(*objOrErr);
+
 			for (auto& section : obj.getBinary()->sections()) {
 				auto section_name = section.getName();
 				if (!section_name || *section_name != ".text") continue;
@@ -4283,7 +4281,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 				// TODO: write code section to the VM...
 				for (auto& symbol : obj.getBinary()->symbols()) {
 					auto symbol_name = symbol.getName();
-					if (!symbol_name || *symbol_name != external_function_name) continue;
+					if (!symbol_name || *symbol_name != function->getName()) continue;
 
 					// TODO: match this with the name of the function from f
 					auto symbol_value = symbol.getValue();
