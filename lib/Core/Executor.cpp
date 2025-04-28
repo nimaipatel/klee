@@ -4117,7 +4117,6 @@ static std::set<std::string> okExternals(okExternalsList,
 				(sizeof(okExternalsList)/sizeof(okExternalsList[0])));
 
 
-static uc_engine *unicorn_engine = NULL;
 
 #define ADDRESS      0x10000
 #define STACK_ADDR   0x300000
@@ -4125,34 +4124,6 @@ static uc_engine *unicorn_engine = NULL;
 #define DATA_ADDR    0x400000
 #define DATA_SIZE    0x1000
 
-void unicorn_init_lazy() {
-    if (unicorn_engine) return;
-
-    uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
-    if (err != UC_ERR_OK) {
-        llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err) << "\n";
-        abort();
-    }
-
-    // Map code, stack, and data memory
-    err = uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
-    if (err != UC_ERR_OK) {
-        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
-        abort();
-    }
-
-	err = uc_mem_map(unicorn_engine, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
-    if (err != UC_ERR_OK) {
-        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
-        abort();
-    }
-
-    err = uc_mem_map(unicorn_engine, DATA_ADDR, DATA_SIZE, UC_PROT_ALL);
-    if (err != UC_ERR_OK) {
-        llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
-        abort();
-    }
-}
 
 void hook_mem_invalid(uc_engine *uc, uc_mem_type type, uint64_t address, int size, int64_t value, void *user_data) {
     printf("❌ Invalid memory %s at 0x%08llx (size %d)\n",
@@ -4219,100 +4190,6 @@ void Executor::callExternalFunction(ExecutionState &state,
 				}
 		}
 
-		std::string target_triple = kmodule->module->getTargetTriple();
-		std::string external_function_name = function->getName().str();
-		
-		if (target_triple == "armv7-none-unknown-eabi") {
-			unicorn_init_lazy();
-
-			// TODO: get the object file using LD_PRELOAD env variable
-			auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
-			if (!objOrErr) {
-				llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
-				return;
-			}
-			auto obj = std::move(*objOrErr);
-			for (auto& section : obj.getBinary()->sections()) {
-				auto section_name = section.getName();
-				if (!section_name || *section_name != ".text") continue;
-
-				auto text_contents = section.getContents();
-				if (!text_contents) {
-					llvm::errs() << "Failed to get section contents\n";
-					continue;
-				}
-
-  				uc_mem_write(unicorn_engine, ADDRESS, text_contents->data(), text_contents->size());
-
-				// TODO: write code section to the VM...
-				for (auto& symbol : obj.getBinary()->symbols()) {
-					auto symbol_name = symbol.getName();
-					if (!symbol_name || *symbol_name != external_function_name) continue;
-
-					// TODO: match this with the name of the function from f
-					auto symbol_value = symbol.getValue();
-					if (!symbol_value) {
-						llvm::errs() << "Failed to get symbol value\n";
-						continue;
-					}
-					// TODO: start executing from the offset...
-					uint64_t offset = *symbol_value;
-					// uint64_t start_addr = ADDRESS + offset;
-
-					// uint32_t sp = STACK_ADDR + STACK_SIZE;
-					// uint32_t dummy_lr = ADDRESS + text_contents->size();
-
-					int i = 0;
-					for (; i < arguments.size() && i < 4; i += 1) {
-						uint32_t arg = (uint32_t) args[2 + i];
-						uc_reg_write(unicorn_engine, UC_ARM_REG_R0 + i, &arg);
-					}
-
-					uint32_t stack = STACK_ADDR + STACK_SIZE;
-					for (; i < arguments.size(); i += 1) {
-						// TODO: think this through...
-						uint32_t arg = (uint32_t) args[2 + i];
-						stack -= sizeof(arg);
-						uc_mem_write(unicorn_engine, stack, &arg, sizeof(arg));
-					}
-
-					uc_reg_write(unicorn_engine, UC_ARM_REG_SP, &stack);
-
-					// TODO: think this through...
-					uint32_t lr = ADDRESS + text_contents->size();
-					uc_reg_write(unicorn_engine, UC_ARM_REG_LR, &lr);
-
-					uc_hook trace;
-					uc_hook_add(unicorn_engine, &trace, UC_HOOK_MEM_INVALID, (void*)hook_mem_invalid, NULL, 1, 0);
-
-
-    				uc_err err_uc = uc_emu_start(unicorn_engine, ADDRESS + offset, lr, 0, 0);
-					// TODO: error handling...
-					if (err_uc != UC_ERR_OK) {
-						std::cerr << "Unicorn emulation failed: " << uc_strerror(err_uc) << std::endl;
-						abort();
-					}
-
-					uint32_t ret_val = 0;
-					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
-
-					args[0] = ret_val;
-					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
-				}
-			}
-
-
-			Type *resultType = target->inst->getType();
-			if (resultType != Type::getVoidTy(function->getContext())) {
-					ref<Expr> e = ConstantExpr::fromMemory((void*) args, 
-									getWidthForLLVMType(resultType));
-					bindLocal(target, state, e);
-			}
-
-			// unicorn case, this is all we need, so return early...
-			return;
-		}
-
 
 		// Prepare external memory for invoking the function
 		state.addressSpace.copyOutConcretes();
@@ -4355,14 +4232,137 @@ void Executor::callExternalFunction(ExecutionState &state,
 						klee_warning_once(function, "%s", os.str().c_str());
 		}
 
-		bool success = externalDispatcher->executeCall(function, target->inst, args);
-		if (!success) {
-				klee_warning(("Contunuing execution with accuracy tradeoff on failed external call:" +function->getName().str()).c_str());
-				args[0] = 0;
-				//    terminateStateOnError(state, "failed external call: " + function->getName(),
-				//                          StateTerminationType::External);
+		std::string target_triple = kmodule->module->getTargetTriple();
+		std::string external_function_name = function->getName().str();
+		
+		// if (target_triple == "armv7-none-unknown-eabi") {
+		if (true) {
+			uc_engine *unicorn_engine = NULL;
+
+    		uc_err err = uc_open(UC_ARCH_ARM, UC_MODE_ARM, &unicorn_engine);
+    		if (err != UC_ERR_OK) {
+        		llvm::errs() << "Failed to initialize Unicorn engine: " << uc_strerror(err) << "\n";
+        		abort();
+    		}
+
+    		// Map code, stack, and data memory
+    		err = uc_mem_map(unicorn_engine, ADDRESS, 2 * 1024 * 1024, UC_PROT_ALL);
+    		if (err != UC_ERR_OK) {
+        		llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        		abort();
+    		}
+
+			err = uc_mem_map(unicorn_engine, STACK_ADDR, STACK_SIZE, UC_PROT_ALL);
+    		if (err != UC_ERR_OK) {
+        		llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        		abort();
+    		}
+
+    		err = uc_mem_map(unicorn_engine, DATA_ADDR, DATA_SIZE, UC_PROT_ALL);
+    		if (err != UC_ERR_OK) {
+        		llvm::errs() << "Failed to memory map: " << uc_strerror(err) << "\n";
+        		abort();
+    		}
+
+			// TODO: get the object file using LD_PRELOAD env variable
+			auto objOrErr = object::ObjectFile::createObjectFile("/home/nimai/Software/klee/foo.o");
+			if (!objOrErr) {
+				llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "Object load error: ");
 				return;
+			}
+			auto obj = std::move(*objOrErr);
+			for (auto& section : obj.getBinary()->sections()) {
+				auto section_name = section.getName();
+				if (!section_name || *section_name != ".text") continue;
+
+				auto text_contents = section.getContents();
+				if (!text_contents) {
+					llvm::errs() << "Failed to get section contents\n";
+					abort();
+				}
+
+  				uc_mem_write(unicorn_engine, ADDRESS, text_contents->data(), text_contents->size());
+
+				// TODO: write code section to the VM...
+				for (auto& symbol : obj.getBinary()->symbols()) {
+					auto symbol_name = symbol.getName();
+					if (!symbol_name || *symbol_name != external_function_name) continue;
+
+					// TODO: match this with the name of the function from f
+					auto symbol_value = symbol.getValue();
+					if (!symbol_value) {
+						llvm::errs() << "Failed to get symbol value\n";
+						abort();
+					}
+
+					// TODO: start executing from the offset...
+					uint64_t offset = *symbol_value;
+					// uint64_t start_addr = ADDRESS + offset;
+
+					// uint32_t sp = STACK_ADDR + STACK_SIZE;
+					// uint32_t dummy_lr = ADDRESS + text_contents->size();
+
+					int i = 0;
+					for (; i < arguments.size() && i < 4; i += 1) {
+						uint32_t arg = (uint32_t) args[2 + i];
+						uc_reg_write(unicorn_engine, UC_ARM_REG_R0 + i, &arg);
+					}
+
+					uint32_t stack = STACK_ADDR + STACK_SIZE;
+					for (; i < arguments.size(); i += 1) {
+						// TODO: think this through...
+						uint32_t arg = (uint32_t) args[2 + i];
+						stack -= sizeof(arg);
+						uc_mem_write(unicorn_engine, stack, &arg, sizeof(arg));
+					}
+
+					uc_reg_write(unicorn_engine, UC_ARM_REG_SP, &stack);
+
+					// TODO: think this through...
+					uint32_t lr = ADDRESS + text_contents->size();
+					uc_reg_write(unicorn_engine, UC_ARM_REG_LR, &lr);
+
+					uc_hook trace;
+					uc_hook_add(unicorn_engine, &trace, UC_HOOK_MEM_INVALID, (void*)hook_mem_invalid, NULL, 1, 0);
+
+    				uc_err err_uc = uc_emu_start(unicorn_engine, ADDRESS + offset, lr, 0, 0);
+					// TODO: error handling...
+					if (err_uc != UC_ERR_OK) {
+						std::cerr << "Unicorn emulation failed: " << uc_strerror(err_uc) << std::endl;
+						abort();
+					}
+
+					uint32_t ret_val = 0;
+					uc_reg_read(unicorn_engine, UC_ARM_REG_R0, &ret_val);
+
+					args[0] = (uint64_t) ret_val;
+					args[1] = 0;
+
+					// Type *resultType = target->inst->getType();
+					// if (resultType != Type::getVoidTy(function->getContext())) {
+					// 		ref<Expr> e = ConstantExpr::fromMemory((void*) args, 
+					// 						getWidthForLLVMType(resultType));
+					// 		bindLocal(target, state, e);
+					// }
+
+					// // unicorn case, this is all we need, so return early...
+					std::cout << "[Klee Debug] Return value: " << ret_val << std::endl;
+					// return;
+
+    				uc_close(unicorn_engine);
+				}
+			}
+		} else {
+			bool success = externalDispatcher->executeCall(function, target->inst, args);
+			if (!success) {
+					klee_warning(("Contunuing execution with accuracy tradeoff on failed external call:" +function->getName().str()).c_str());
+					args[0] = 0;
+					//    terminateStateOnError(state, "failed external call: " + function->getName(),
+					//                          StateTerminationType::External);
+					return;
+			}
 		}
+
 
 		if (!state.addressSpace.copyInConcretes()) {
 				terminateStateOnError(state, "external modified read-only object",
