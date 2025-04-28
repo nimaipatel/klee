@@ -4290,12 +4290,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 						abort();
 					}
 
-					// TODO: start executing from the offset...
 					uint64_t offset = *symbol_value;
-					// uint64_t start_addr = ADDRESS + offset;
-
-					// uint32_t sp = STACK_ADDR + STACK_SIZE;
-					// uint32_t dummy_lr = ADDRESS + text_contents->size();
 
 					int i = 0;
 					for (; i < arguments.size() && i < 4; i += 1) {
@@ -4334,6 +4329,10 @@ void Executor::callExternalFunction(ExecutionState &state,
 					args[1] = 0;
 
     				uc_close(unicorn_engine);
+					
+					// completed execution, don't need to search for symbols and
+					// sections any more, break out of all loops...
+					goto BREAK_ALL;
 				}
 			}
 		} else {
@@ -4347,6 +4346,7 @@ void Executor::callExternalFunction(ExecutionState &state,
 			}
 		}
 
+BREAK_ALL:
 
 		if (!state.addressSpace.copyInConcretes()) {
 				terminateStateOnError(state, "external modified read-only object",
